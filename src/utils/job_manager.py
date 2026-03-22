@@ -71,6 +71,23 @@ def get_ledger() -> Dict[str, Any]:
     with _ledger_lock:
         return _load_ledger()
 
+def delete_job(local_job_id: str) -> bool:
+    """Forcefully removes a job from the ledger and deletes its local state file."""
+    with _ledger_lock:
+        ledger = _load_ledger()
+        if local_job_id in ledger:
+            ledger.pop(local_job_id, None)
+            _save_ledger(ledger)
+            
+            state_file = get_job_state_file(local_job_id)
+            if os.path.exists(state_file):
+                try:
+                    os.remove(state_file)
+                except Exception:
+                    pass
+            return True
+        return False
+
 def cleanup_jobs() -> int:
     """Removes local state files for jobs that are completed, failed, or errored."""
     with _ledger_lock:
@@ -84,7 +101,7 @@ def cleanup_jobs() -> int:
                 if os.path.exists(state_file):
                     try:
                         os.remove(state_file)
-                        removed_count = removed_count + 1
+                        removed_count += 1
                     except Exception:
                         pass
         return removed_count
