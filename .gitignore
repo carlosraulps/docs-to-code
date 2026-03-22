@@ -9,3 +9,4 @@ venv/
 .venv/
 .pytest_cache/
 .jobs/
+output/
