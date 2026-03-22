@@ -6,6 +6,8 @@ A modular Python application that transforms handwritten notes (docs, pdfs or Im
 
 - **Dual Output**: Generates both `.tex` and `.md` files in a single pass.
 - **Automated Workflow**: Splits PDFs, processes images, and generates documents automatically.
+- **Pagination Control**: Extract specific page ranges from large PDFs using `start_page` and `end_page` to prevent memory overflow.
+- **Live Logging**: Real-time progress tracking of background batch API jobs via `gemini_api.log` (`verbose` mode).
 - **Smart Vision**: Enhances images (denoising, deskewing) with OpenCV before processing.
 - **Incremental Processing**: Skips already processed images using a smart cache to save time and API tokens.
 - **Self-Correction & Resiliency**: Built-in retry loops and prompt engineering handle malformed LLM JSON outputs autonomously.
@@ -115,6 +117,8 @@ Add the connection configuration to your AI agent's extension config (e.g., `gem
 
 Once registered, your AI agent can natively run commands like:
 > "Convert the handwritten notes at `/path/to/notes.png` into LaTeX code."
+
+**New in v1.1:** For large PDFs, you can specify `start_page` and `end_page` to process in chunks, and enable `verbose` to tail logs in `gemini_api.log`.
 
 ## License
 

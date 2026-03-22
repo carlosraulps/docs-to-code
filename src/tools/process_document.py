@@ -13,23 +13,36 @@ class ProcessDocumentInput(BaseModel):
     document_path: str = Field(..., description="The absolute file path to the PDF document or a folder of images.")
     mode: Literal["latex", "markdown", "both"] = Field(default="both", description="The desired textual output format.")
     threshold_pages: Optional[int] = Field(default=50, description="Optional page threshold to automatically switch to the async Batch API.")
+    start_page: Optional[int] = Field(default=None, description="Start page for PDF extraction.")
+    end_page: Optional[int] = Field(default=None, description="End page for PDF extraction.")
+    verbose: bool = Field(default=False, description="Enable verbose logging to gemini_api.log")
 
-def background_task(doc_path, work_dir, mode, is_pdf, local_job_id):
+
+def log_progress(msg, verbose):
+    if verbose:
+        with open("/Users/apple/Research/docs-to-code/gemini_api.log", "a") as lf:
+            lf.write(msg + "\n")
+
+def background_task(doc_path, work_dir, mode, is_pdf, local_job_id, start_page, end_page, verbose):
     state_file = f"/Users/apple/Research/docs-to-code/{local_job_id}.json"
     try:
         with open(state_file, "w") as f:
             json.dump({"status": "extracting_images"}, f)
+        log_progress(f"Job {local_job_id}: extracting images...", verbose)
             
         if is_pdf:
-            image_paths = vision.process_pdf(doc_path, work_dir)
+            image_paths = vision.process_pdf(doc_path, work_dir, start_page=start_page, end_page=end_page)
         else:
             image_paths = [os.path.join(doc_path, f) for f in os.listdir(doc_path) if f.lower().endswith((".png", ".jpg", ".jpeg"))]
             
         with open(state_file, "w") as f:
             json.dump({"status": "uploading_images"}, f)
+        log_progress(f"Job {local_job_id}: uploading images to Gemini API...", verbose)
             
         processor = BatchProcessor()
+        log_progress(f"Job {local_job_id}: submitting batch job...", verbose)
         result = processor.process_directory_batch(image_paths, mode)
+        log_progress(f"Job {local_job_id}: batch job submitted. Results: {result}", verbose)
         
         with open(state_file, "w") as f:
             json.dump(result, f)
@@ -42,6 +55,9 @@ def smart_process_document(input_data: ProcessDocumentInput) -> str:
     doc_path = input_data.document_path
     mode = input_data.mode
     threshold = input_data.threshold_pages
+    start_page = input_data.start_page
+    end_page = input_data.end_page
+    verbose = input_data.verbose
 
     if not os.path.exists(doc_path):
         return json.dumps({"error": "FileNotFound", "details": f"Cannot find {doc_path}"})
@@ -59,6 +75,10 @@ def smart_process_document(input_data: ProcessDocumentInput) -> str:
                 import pdf2image
                 info = pdf2image.pdfinfo_from_path(doc_path)
                 num_images = int(info.get("Pages", 0))
+                if end_page is not None:
+                    num_images = min(num_images, end_page)
+                if start_page is not None:
+                    num_images = max(1, num_images - start_page + 1)
             except Exception:
                 num_images = 100 
         else:
@@ -69,7 +89,7 @@ def smart_process_document(input_data: ProcessDocumentInput) -> str:
 
         if num_images > threshold:
             local_job_id = f"local-{uuid.uuid4().hex[:8]}"
-            t = threading.Thread(target=background_task, args=(doc_path, work_dir, mode, is_pdf, local_job_id))
+            t = threading.Thread(target=background_task, args=(doc_path, work_dir, mode, is_pdf, local_job_id, start_page, end_page, verbose))
             t.daemon = True
             t.start()
             
@@ -83,7 +103,7 @@ def smart_process_document(input_data: ProcessDocumentInput) -> str:
             intel = CachedIntelligence()
             try:
                 if is_pdf:
-                    image_paths = vision.process_pdf(doc_path, work_dir)
+                    image_paths = vision.process_pdf(doc_path, work_dir, start_page=start_page, end_page=end_page)
                 else:
                     image_paths = [os.path.join(doc_path, f) for f in os.listdir(doc_path) if f.lower().endswith((".png", ".jpg", ".jpeg"))]
 

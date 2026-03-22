@@ -119,24 +119,21 @@ class BatchProcessor:
         """Polls the API for the batch status."""
         try:
             job = self.client.batches.get(name=job_name)
+            state_str = str(job.state)
             
-            if job.state == "SUCCEEDED":
-                # We can download the output file
-                out_uri = job.output_uri
-                # Typically we download the file associated with job.output_file... 
-                # (Implementation depends on the exact syntax of the selected SDK version)
+            if "SUCCEEDED" in state_str:
                 return {
                     "status": "completed",
-                    "output_uri": out_uri,
+                    "output_uri": getattr(job, "output_uri", ""),
                     "message": "Job finished. Ready to parse results."
                 }
-            elif job.state == "FAILED":
+            elif "FAILED" in state_str:
                 return {"status": "failed", "message": "The Background Batch Job Failed."}
             else:
                 return {
                     "status": "processing", 
-                    "state": job.state,
-                    "message": f"Job is currently: {job.state}"
+                    "state": state_str,
+                    "message": f"Job is currently: {state_str}"
                 }
                 
         except Exception as e:
@@ -146,8 +143,9 @@ class BatchProcessor:
         """Downloads the batch results and extracts latex or markdown in sorted order."""
         try:
             job = self.client.batches.get(name=job_name)
-            if str(job.state) != "JobState.JOB_STATE_SUCCEEDED":
-                return f"Job is not completed yet. Current state: {job.state}"
+            state_str = str(job.state)
+            if "SUCCEEDED" not in state_str:
+                return f"Job is not completed yet. Current state: {state_str}"
             
             file_name = job.dest.file_name
             print(f"Downloading {file_name}...")
@@ -177,7 +175,6 @@ class BatchProcessor:
                             custom_id = data.get('custom_id', '')
                             
                             # Parse page number using basic regex
-                            # Matches XImage123.png, page-123.jpg, file_123.png
                             match = re.search(r'(?:Image|page|file)[_-]?(\d+)', custom_id, re.IGNORECASE)
                             if match:
                                 page_num = int(match.group(1))
@@ -192,14 +189,17 @@ class BatchProcessor:
                             if content_str.startswith('```'): content_str = content_str[3:]
                             if content_str.endswith('```'): content_str = content_str[:-3]
                             
-                            content_json = json.loads(content_str)
-                            base = content_json.get('base_latex_md')
-                            
-                            extracted_text = ""
-                            if isinstance(base, dict):
-                                extracted_text = base.get(fmt, '')
-                            elif isinstance(base, str):
-                                extracted_text = base
+                            try:
+                                content_json = json.loads(content_str)
+                                base = content_json.get('base_latex_md')
+                                
+                                extracted_text = ""
+                                if isinstance(base, dict):
+                                    extracted_text = base.get(fmt, '')
+                                elif isinstance(base, str):
+                                    extracted_text = base
+                            except:
+                                extracted_text = content_str
                                 
                             if extracted_text:
                                 pages_data[page_num] = extracted_text

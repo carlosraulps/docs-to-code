@@ -9,7 +9,7 @@ from src.tools.check_batch_status import CheckBatchStatusInput
 mcp = FastMCP("docs-to-code")
 
 @mcp.tool()
-def process_document(document_path: str, mode: str = "latex", threshold_pages: int = 50) -> str:
+def process_document(document_path: str, mode: str = "latex", threshold_pages: int = 50, start_page: int = None, end_page: int = None, verbose: bool = False) -> str:
     """
     Converts a PDF or image of handwritten notes/equations into LaTeX or Markdown code.
     """
@@ -17,7 +17,10 @@ def process_document(document_path: str, mode: str = "latex", threshold_pages: i
         input_data = ProcessDocumentInput(
             document_path=document_path, 
             mode=mode,
-            threshold_pages=threshold_pages
+            threshold_pages=threshold_pages,
+            start_page=start_page,
+            end_page=end_page,
+            verbose=verbose
         )
         return smart_process_document(input_data)
         
