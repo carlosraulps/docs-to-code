@@ -87,8 +87,8 @@ def manage_jobs(action: str = "list", job_id: Optional[str] = None) -> str:
     Manage the local background jobs tracker.
     
     Args:
-        action: 'list' to show tracked jobs, 'cleanup' to delete local state files for finished/failed jobs.
-        job_id: Optional specific job ID to fetch info.
+        action: 'list' to show tracked jobs, 'cleanup' to delete finished/failed states, 'delete' to force-remove a job.
+        job_id: Optional specific job ID to fetch info or force-delete.
     """
     from src.utils import job_manager
     import json
@@ -103,8 +103,15 @@ def manage_jobs(action: str = "list", job_id: Optional[str] = None) -> str:
         elif action == "cleanup":
             removed = job_manager.cleanup_jobs()
             return json.dumps({"status": "success", "message": f"Cleaned up {removed} local job state files."})
+        elif action == "delete":
+            if not job_id:
+                return json.dumps({"error": "job_id is required for 'delete' action."})
+            success = job_manager.delete_job(job_id)
+            if success:
+                return json.dumps({"status": "success", "message": f"Job {job_id} force-deleted successfully."})
+            return json.dumps({"error": f"Job {job_id} not found in ledger."})
         else:
-            return json.dumps({"error": "Invalid action. Use 'list' or 'cleanup'."})
+            return json.dumps({"error": "Invalid action. Use 'list', 'cleanup', or 'delete'."})
     except Exception as e:
         return json.dumps({"error": "ManageJobsException", "details": str(e)})
 
