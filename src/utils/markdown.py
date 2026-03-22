@@ -49,7 +49,7 @@ def generate_md_file(title: str, content_list: List[str], output_dir: str | Path
                 f.write(content)
                 f.write("\n\n---\n\n")
         
-        return output_path
+        return str(output_path)
     except Exception as e:
         print(f"Error writing Markdown file {output_path}: {e}")
         return ""

@@ -1,110 +1,102 @@
-# OCR-to-LaTeX & Markdown Converter
+# Images-to-TeX & Markdown (Model Context Protocol)
 
-A modular Python application that transforms handwritten notes (docs, pdfs or Images) into editable, semantic LaTeX code using the **Google Gemini 3.1 Pro Preview** API.
+An advanced semantic document parser and agentic "skill" that transforms images of textbooks, handwritten equations, and notes into strictly separated layers (Base Printed Content vs. Human Annotations) formatted as LaTeX or Markdown.
 
-## Features
+## 🚀 Overview
 
-- **Dual Output**: Generates both `.tex` and `.md` files in a single pass.
-- **Automated Workflow**: Splits PDFs, processes images, and generates documents automatically.
-- **Pagination Control**: Extract specific page ranges from large PDFs using `start_page` and `end_page` to prevent memory overflow.
-- **Live Logging**: Real-time progress tracking of background batch API jobs via `gemini_api.log` (`verbose` mode).
-- **Smart Vision**: Enhances images (denoising, deskewing) with OpenCV before processing.
-- **Incremental Processing**: Skips already processed images using a smart cache to save time and API tokens.
-- **Self-Correction & Resiliency**: Built-in retry loops and prompt engineering handle malformed LLM JSON outputs autonomously.
-- **Semantic Understanding**: Uses Gemini models to interpret equations, theorems, and proofs correctly.
-- **Figure Handling**: Detected diagrams are captioned and placed in proper `figure` environments (LaTeX) or image placeholders (Markdown).
+This application acts as a high-precision OCR and document interpretation engine powered by **Google Gemini 1.5 Pro/Flash**. It is designed to be used both as a standalone CLI tool and as a **Model Context Protocol (MCP)** server, allowing AI agents (like Claude or Gemini) to interact with physical documents with extreme structural accuracy.
 
-## Installation
+## 🛠 Features
+
+-   **Structural Stratification**: Strictly separates the original printed text from human annotations (handwritten notes, highlights, margin clues).
+-   **Dual Mode Extraction**: Generates perfectly formatted LaTeX (for academic typesetting) and Markdown (for web/docs) simultaneously.
+-   **Intelligent Vision Pipeline**: Uses OpenCV for denoising, deskewing, and binarization to maximize OCR reliability.
+-   **Hybrid Processing Architecture**:
+    -   **Synchronous**: Low-latency processing for small documents using **Context Caching** to reduce costs.
+    -   **Asynchronous (Batch API)**: Background processing for massive PDFs (50+ pages) to avoid timeouts.
+-   **Job Management Ledger**: Centralized tracking of all background jobs in a `.jobs/` directory with a ledger for history and verification.
+-   **Self-Correction**: Robust retry logic that feeds linter/parsing errors back to the LLM to fix malformed JSON outputs.
+
+---
+
+## 🏗 How it Works (Architecture)
+
+The following diagram illustrates the flow from an Agent request to the final extracted document:
+
+```mermaid
+graph TD
+    User((User/Agent)) -->|MCP Call| MCP[MCP Server]
+    MCP -->|Invoke| PD[process_document]
+    
+    PD -->|Analyze| Threshold{Pages > Threshold?}
+    
+    subgraph "Synchronous Flow (Small Docs)"
+    Threshold -->|No| Sync[Local Execution]
+    Sync -->|vision.py| VP[PDF/Image Extraction]
+    VP -->|OpenCV| CV[Image Enhancement]
+    CV -->|Prompt| GAI[Gemini 1.5: Context Caching]
+    GAI -->|Stream JSON| Parse[Pydantic Validation]
+    Parse -->|JSON Result| User
+    end
+    
+    subgraph "Asynchronous Flow (Large Docs)"
+    Threshold -->|Yes| Async[Traffic Controller]
+    Async -->|Thread| BT[Background Task]
+    BT -->|Ledger| JM[Job Manager: .jobs/ledger.json]
+    BT -->|Upload| GFiles[Gemini Files API]
+    BT -->|JSONL| GBatch[Gemini Batch API]
+    Async -->|Local Job ID| User
+    end
+    
+    subgraph "Status & Management"
+    User -->|Call| CS[check_document_status]
+    CS -->|Check Ledger| JM
+    CS -->|Poll API| GBatch
+    GBatch -->|Done| Results[Download & Extract]
+    Results -->|.tex / .md| User
+    
+    User -->|Call| MJ[manage_jobs]
+    MJ -->|List/Cleanup| JM
+    end
+```
+
+---
+
+## 📦 Installation
 
 ### Prerequisites
-
-- Python 3.9+
+- Python 3.10+
 - [Poppler](https://github.com/check-repos/poppler) (Required for PDF processing)
   - macOS: `brew install poppler`
   - Linux: `sudo apt-get install poppler-utils`
 
 ### Setup
+1. **Clone & Install**:
+   ```bash
+   git clone <repository_url>
+   cd docs-to-code
+   pip install -r requirements.txt
+   ```
 
-1. **Clone the repository**:
+2. **Configure Environment**:
+   Create a `.env` file in the root:
+   ```text
+   GOOGLE_API_KEY=your_gemini_api_key_here
+   ```
 
-    ```bash
-    git clone <repository_url>
-    cd docs-to-code
-    ```
+---
 
-2. **Install dependencies**:
+## 🤖 MCP Server Usage
 
-    ```bash
-    pip install -r requirements.txt
-    ```
-
-3. **Configure API Key**:
-    Get your API key from [Google AI Studio](https://aistudio.google.com/).
-
-    Create a `.env` file in the root directory:
-
-    ```bash
-    GOOGLE_API_KEY=your_api_key_here
-    ```
-
-## Usage
-
-Run the `app.py` script pointing to your source directory:
-
-```bash
-python3 app.py /path/to/your/notes/folder
-```
-
-You will be prompted to choose the output format interactively:
-
-```text
-What would you like to generate? (latex/markdown/both) [both]:
-```
-
-### Folder Structure & Naming
-
-- The script looks for **PDFs** (which it splits automatically) or **Images**.
-- Images are grouped by title using the pattern: `TitleNameXImageNumber.png`.
-  - Example: `Calculus_Ch1XImage1.png`, `Calculus_Ch1XImage2.png`.
-
-### Output
-
-- A `.tex` file is generated for each title (e.g., `Calculus_Ch1.tex`).
-- A `.md` file is generated for each title (e.g., `Calculus_Ch1.md`).
-- A `processed_log.json` file is created to track progress.
-
-## Architecture
-
-- `vision.py`: Image pre-processing and PDF handling.
-- `intelligence.py`: Interface with Google Gen AI SDK (Gemini).
-- `llm_utils.py`: Utilities for LLM JSON sanitization and self-correction retry loops.
-- `memory.py`: State management for incremental builds.
-- `latex.py`: LaTeX generation and package management.
-- `markdown.py`: Markdown file generation.
-- `app.py`: Main entry point and orchestration.
-
-## MCP Server & Agent Skill Setup
-
-This repository can now be run as a standard Model Context Protocol (MCP) server, allowing AI assistants to interact with it directly as a "Skill".
-
-### 1. Install MCP Dependencies
-
-```bash
-pip install mcp
-```
-
-### 2. Register the Extension
-
-Add the connection configuration to your AI agent's extension config (e.g., `gemini-extension.json` or `claude_desktop_config.json`):
+This application is built as an MCP server. Add the following to your agent's configuration (e.g., `claude_desktop_config.json`):
 
 ```json
 {
   "mcpServers": {
-    "docs-to-code": {
+    "images-to-tex": {
       "command": "python3",
-      "args": [
-        "/absolute/path/to/docs-to-code/mcp_server.py"
-      ],
+      "args": ["-m", "src.interfaces.mcp_server"],
+      "cwd": "/absolute/path/to/docs-to-code",
       "env": {
         "GOOGLE_API_KEY": "your_api_key_here"
       }
@@ -113,13 +105,24 @@ Add the connection configuration to your AI agent's extension config (e.g., `gem
 }
 ```
 
-### 3. Invoke the Skill
+### Available Tools
 
-Once registered, your AI agent can natively run commands like:
-> "Convert the handwritten notes at `/path/to/notes.png` into LaTeX code."
+| Tool | Description | Key Arguments |
+| :--- | :--- | :--- |
+| `process_document` | Main entry point for PDF/Image processing. | `document_path`, `mode` (latex/markdown), `threshold_pages` |
+| `check_document_status` | Polls status for background/batch jobs. | `job_id`, `output_format` |
+| `manage_jobs` | Manages the local `.jobs/` ledger. | `action` (list/cleanup), `job_id` |
 
-**New in v1.1:** For large PDFs, you can specify `start_page` and `end_page` to process in chunks, and enable `verbose` to tail logs in `gemini_api.log`.
+---
 
-## License
+## 📂 Project Structure
 
-[MIT](LICENSE)
+- `src/interfaces/`: Entry points (MCP Server, CLI).
+- `src/services/`: Core logic (Vision pipeline, Gemini Intelligence, Batch Processor).
+- `src/tools/`: High-level tool implementations.
+- `src/models/`: Pydantic data models for structured output.
+- `src/utils/`: Shared utilities (Job Manager, LLM prompt engineering).
+- `.jobs/`: (Gitignored) Local storage for background job states and ledger.
+
+## 📝 License
+MIT

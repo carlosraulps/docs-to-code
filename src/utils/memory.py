@@ -1,10 +1,10 @@
 import json
 import os
 import hashlib
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 class Memory:
-    def __init__(self, log_path: str = None):
+    def __init__(self, log_path: Optional[str] = None):
         if not log_path:
             cache_dir = os.path.expanduser("~/.cache/docs-to-code")
             os.makedirs(cache_dir, exist_ok=True)
@@ -78,5 +78,5 @@ class Memory:
         self.save_state()
 
     def _get_file_id(self, file_path: str) -> str:
-        """Generates a unique ID for the file based on its name/path."""
-        return os.path.basename(file_path) # Simpler to read log, assumming unique names per folder
+        """Generates a unique ID for the file based on its absolute path."""
+        return hashlib.sha256(os.path.abspath(file_path).encode()).hexdigest()

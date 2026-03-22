@@ -1,7 +1,7 @@
 {
   "name": "docs-to-code",
   "version": "1.0.0",
-  "description": "An Agent Skill providing tools to convert images of textbooks, handwritten equations, and notes into LaTeX or Markdown.",
+  "description": "An Agent Skill providing tools to convert pdf's or images of textbooks, handwritten notes, and handwritten equations into LaTeX or Markdown.",
   "mcpServers": {
     "docs-to-code": {
       "command": "/Users/apple/venvs/research/bin/python3",

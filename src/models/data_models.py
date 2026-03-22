@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 class AnnotationMetadata(BaseModel):
     category: str = Field(description="Classification: handwritten_note, highlight, margin_clue, or user_proof")
@@ -13,3 +13,4 @@ class BaseLatexMd(BaseModel):
 class DocumentPayload(BaseModel):
     base_latex_md: BaseLatexMd
     annotations_metadata: List[AnnotationMetadata]
+    api_usage: Optional[Dict[str, Any]] = Field(default=None, description="API Token usage and source information.")

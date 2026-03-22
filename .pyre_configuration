@@ -1,0 +1,9 @@
+{
+  "source_directories": [
+    "."
+  ],
+  "exclude": [
+    "**/__pycache__/*",
+    ".git/*"
+  ]
+}

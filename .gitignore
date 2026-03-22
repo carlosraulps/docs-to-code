@@ -8,3 +8,4 @@ test_project/
 venv/
 .venv/
 .pytest_cache/
+.jobs/

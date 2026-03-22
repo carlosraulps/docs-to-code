@@ -122,8 +122,6 @@ class Intelligence:
         """
         Sends the image to Gemini API and returns a structured dictionary representing the DocumentPayload.
         """
-        from src.utils import llm_utils
-
         try:
             # Upload the file using the new SDK's file API or pass directly.
             file_ref = self.client.files.upload(file=image_path)
@@ -171,24 +169,35 @@ class CachedIntelligence(Intelligence):
         self.display_name = display_name
         
     def initialize_cache(self, mode: str):
-        """Creates a cached content object for the System/Master Prompt."""
-        from google.genai import types
-        master_prompt = ContextMerger.get_master_prompt(mode)
-        
-        # TTL is set to 60 minutes for a typical processing session
-        try:
-            self.cached_content = self.client.caches.create(
-                model=self.model_name,
-                config=types.CreateCachedContentConfig(
-                    contents=[master_prompt],
-                    display_name=self.display_name,
-                    ttl="3600s",
+        """Creates or reuses a cached content object for the System/Master Prompt."""
+        with _GLOBAL_CACHES_LOCK:
+            if mode in _GLOBAL_CACHES:
+                try:
+                    # Check if the existing cache is still valid (hasn't expired/been deleted remotely)
+                    self.cached_content = self.client.caches.get(name=_GLOBAL_CACHES[mode].name)
+                    print(f"Reusing existing context cache for mode '{mode}': {self.cached_content.name}")
+                    return
+                except Exception:
+                    pass # Expired/invalid, recreate it below
+                    
+            from google.genai import types
+            master_prompt = ContextMerger.get_master_prompt(mode)
+            
+            # TTL is set to 60 minutes for a typical processing session
+            try:
+                self.cached_content = self.client.caches.create(
+                    model=self.model_name,
+                    config=types.CreateCachedContentConfig(
+                        contents=[master_prompt],
+                        display_name=self.display_name,
+                        ttl="3600s",
+                    )
                 )
-            )
-            print(f"Context Cache created successfully: {self.cached_content.name}")
-        except Exception as e:
-            print(f"Context Cache creation failed, falling back to non-cached. Details: {e}")
-            self.cached_content = None
+                _GLOBAL_CACHES[mode] = self.cached_content
+                print(f"Context Cache created successfully: {self.cached_content.name}")
+            except Exception as e:
+                print(f"Context Cache creation failed, falling back to non-cached. Details: {e}")
+                self.cached_content = None
 
     def transcribe_image(self, image_path: str, mode: str = "both") -> dict:
         """Overrides transcribe to use the cached content logic if initialized."""
@@ -196,7 +205,6 @@ class CachedIntelligence(Intelligence):
             # Fallback to normal if cache wasn't initialized
             return super().transcribe_image(image_path, mode)
             
-        from src.utils import llm_utils
         from google.genai import types
 
         try:

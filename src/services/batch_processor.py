@@ -2,7 +2,7 @@ import os
 import json
 import time
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Callable
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
@@ -23,7 +23,7 @@ class BatchProcessor:
         self.client = genai.Client(api_key=self.api_key)
         self.model_name = 'gemini-3.1-pro-preview'
 
-    def process_directory_batch(self, image_paths: List[str], mode: str) -> Dict[str, Any]:
+    def process_directory_batch(self, image_paths: List[str], mode: str, update_state_cb: Callable = None) -> Dict[str, Any]:
         """
         Takes a list of images, uploads them to Gemini Files, creates a JSONL buffer,
         and submits the batch job. Returns the Batch Job Metadata.
@@ -38,18 +38,39 @@ class BatchProcessor:
         
         # 1. Upload files securely for the batch
         uploaded_files = []
-        for path in image_paths:
+        total_files = len(image_paths)
+        import threading
+        # Ensure we only have 3 concurrent staging uploads globally at any given time
+        _upload_semaphore = getattr(BatchProcessor, '_upload_sem', threading.Semaphore(3))
+        BatchProcessor._upload_sem = _upload_semaphore
+        
+        for i, path in enumerate(image_paths):
             try:
+                if update_state_cb:
+                    update_state_cb({
+                        "status": "uploading_images",
+                        "uploaded": i,
+                        "total": total_files,
+                        "current_file": os.path.basename(path)
+                    })
                 # In production, check if file exists on Gemini first, but for now upload
-                f_ref = self.client.files.upload(file=path)
-                uploaded_files.append((path, f_ref))
-                print(f"Uploaded {os.path.basename(path)} to staging.")
+                with _upload_semaphore:
+                    f_ref = self.client.files.upload(file=path)
+                    uploaded_files.append((path, f_ref))
+                print(f"Uploaded {os.path.basename(path)} to staging. ({i+1}/{total_files})")
                 time.sleep(1) # Be nice to the API rate limits during staging
             except Exception as e:
                 print(f"Failed to stage {path}: {e}")
 
         if not uploaded_files:
             return {"status": "error", "message": "Failed to upload any files to staging."}
+
+        if update_state_cb:
+            update_state_cb({
+                "status": "submitting_batch_job",
+                "uploaded": len(uploaded_files),
+                "total": total_files
+            })
 
         # 2. Construct JSONL payload
         for local_path, file_ref in uploaded_files:
@@ -70,7 +91,7 @@ class BatchProcessor:
                                 {"type": "text", "text": master_prompt},
                                 {
                                     "type": "image_url", 
-                                    "image_url": {"url": file_ref.uri} # Note: Check if Gemini supports file_ref.uri in OpenAI compat mode, if not fallback to generic Google url. Or standard Gemini batch format may just map this strictly.
+                                    "image_url": {"url": file_ref.uri} 
                                 }
                             ]
                         }
@@ -81,8 +102,9 @@ class BatchProcessor:
             jsonl_lines.append(json.dumps(request))
 
         # 3. Create the JSONL file locally temporarily
-        batch_input_path = "temp_batch_input.jsonl"
-        with open(batch_input_path, "w") as f:
+        import tempfile
+        fd, batch_input_path = tempfile.mkstemp(suffix=".jsonl")
+        with os.fdopen(fd, "w") as f:
             f.write("\n".join(jsonl_lines))
 
         # 4. Upload the JSONL definition to Gemini
@@ -103,17 +125,26 @@ class BatchProcessor:
             if os.path.exists(batch_input_path):
                 os.remove(batch_input_path)
             
-            return {
+            result = {
                 "status": "processing_background",
                 "job_id": batch_job.name,
                 "job_state": batch_job.state,
+                "uploaded": len(uploaded_files),
+                "total": total_files,
                 "message": f"Successfully queued {len(uploaded_files)} pages. Job ID: {batch_job.name}. Please inform user and check status later."
             }
+            if update_state_cb:
+                update_state_cb(result)
+                
+            return result
             
         except Exception as e:
             if os.path.exists(batch_input_path):
                 os.remove(batch_input_path)
-            return {"status": "error", "message": f"Batch API staging failed: {str(e)}"}
+            err_res = {"status": "error", "message": f"Batch API staging failed: {str(e)}"}
+            if update_state_cb:
+                update_state_cb(err_res)
+            return err_res
 
     def check_job_status(self, job_name: str) -> Dict[str, Any]:
         """Polls the API for the batch status."""

@@ -1,5 +1,6 @@
 import json
 import re
+import time
 from google.genai import types
 from pydantic import BaseModel
 from typing import Optional, Type, Dict, Any
@@ -59,10 +60,28 @@ def generate_pydantic_with_retry(
             
             # Attempt to parse into the required model automatically validates it
             parsed_data = response_schema.model_validate_json(sanitized_text)
-            return parsed_data.model_dump()
+            parsed_dict = parsed_data.model_dump()
+            
+            # Inject usage metadata if available
+            if hasattr(response, 'usage_metadata') and response.usage_metadata:
+                parsed_dict['api_usage'] = {
+                    "prompt_token_count": getattr(response.usage_metadata, 'prompt_token_count', 0),
+                    "candidates_token_count": getattr(response.usage_metadata, 'candidates_token_count', 0),
+                    "total_token_count": getattr(response.usage_metadata, 'total_token_count', 0),
+                    "retries_taken": attempt
+                }
+            return parsed_dict
             
         except Exception as e:
-            print(f"[Warning] Parsing/Validation Error on attempt {attempt + 1}/{max_retries}: {e}")
+            error_str = str(e)
+            print(f"[Warning] Parsing/Validation Error on attempt {attempt + 1}/{max_retries}: {error_str}")
+            
+            # Simple exponential backoff to handle 429 Too Many Requests
+            if "429" in error_str or "quota" in error_str.lower() or "exhausted" in error_str.lower():
+                sleep_time = 2 ** attempt
+                print(f"[Info] Rate limit detected. Sleeping for {sleep_time} seconds before retry.")
+                time.sleep(sleep_time)
+                
             if attempt < max_retries - 1:
                 # Construct the feedback loop prompt
                 error_feedback = f"""
