@@ -42,11 +42,21 @@ def background_task(doc_path, work_dir, mode, is_pdf, local_job_id, start_page, 
                     state_data=state_data
                 )
                 
-        update_state({"status": "extracting_images"})
-        log_progress(f"Job {local_job_id}: extracting images...", verbose)
-            
         if is_pdf:
-            image_paths = vision.process_pdf(doc_path, work_dir, start_page=start_page, end_page=end_page)
+            def extraction_callback(current, total):
+                percent = int((current / total) * 100)
+                update_state({
+                    "status": "extracting_images",
+                    "message": f"Extracting pages {current}/{total} ({percent}% complete)..."
+                })
+
+            image_paths = vision.process_pdf(
+                doc_path, 
+                work_dir, 
+                start_page=start_page, 
+                end_page=end_page, 
+                progress_callback=extraction_callback
+            )
             if not image_paths:
                 raise Exception("vision.process_pdf returned empty list. PDF extraction failed or found no pages.")
         else:
