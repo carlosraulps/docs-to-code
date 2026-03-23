@@ -3,7 +3,7 @@ import json
 from typing import Optional
 from mcp.server.fastmcp import FastMCP
 
-from src.tools.process_document import smart_process_document
+from src.tools.process_document import smart_process_document, resume_and_generate_task
 from src.tools.check_batch_status import check_batch_job
 from src.tools.process_document import ProcessDocumentInput
 from src.tools.check_batch_status import CheckBatchStatusInput
@@ -82,15 +82,33 @@ def process_multiple_documents(document_paths: list[str], mode: str = "latex", t
     return json.dumps(results, indent=2)
 
 @mcp.tool()
+def resume_and_generate(job_id: str) -> str:
+    """
+    Resumes a stalled upload job or forces concurrent client-side native generation instead of the remote Batch API.
+    Use this to strictly assemble the output page-by-page asynchronously.
+    """
+    try:
+        if not job_id:
+            return json.dumps({"error": "MissingInput", "details": "job_id is required."})
+        return resume_and_generate_task(job_id)
+    except Exception as e:
+        import json
+        return json.dumps({
+            "error": "ResumeException",
+            "details": str(e)
+        })
+
+@mcp.tool()
 def manage_jobs(action: str = "list", job_id: Optional[str] = None) -> str:
     """
     Manage the local background jobs tracker.
     
     Args:
-        action: 'list' to show tracked jobs, 'cleanup' to delete finished/failed states, 'delete' to force-remove a job.
-        job_id: Optional specific job ID to fetch info or force-delete.
+        action: 'list' to show tracked jobs, 'cleanup' to delete finished/failed states, 'delete' to force-remove, 'retry' to resume stalled job.
+        job_id: Specific job ID for info, delete, or retry actions.
     """
     from src.utils import job_manager
+    from src.tools.process_document import retry_job
     import json
     try:
         if action == "list":
@@ -110,8 +128,12 @@ def manage_jobs(action: str = "list", job_id: Optional[str] = None) -> str:
             if success:
                 return json.dumps({"status": "success", "message": f"Job {job_id} force-deleted successfully."})
             return json.dumps({"error": f"Job {job_id} not found in ledger."})
+        elif action == "retry":
+            if not job_id:
+                return json.dumps({"error": "job_id is required for 'retry' action."})
+            return retry_job(job_id)
         else:
-            return json.dumps({"error": "Invalid action. Use 'list', 'cleanup', or 'delete'."})
+            return json.dumps({"error": "Invalid action. Use 'list', 'cleanup', 'delete', or 'retry'."})
     except Exception as e:
         return json.dumps({"error": "ManageJobsException", "details": str(e)})
 

@@ -67,6 +67,17 @@ def get_job_state_file(local_job_id: str) -> str:
     _ensure_dir()
     return os.path.join(JOBS_DIR, f"{local_job_id}.json")
 
+def get_job_state(local_job_id: str) -> Optional[Dict[str, Any]]:
+    """Reads the detailed local state file for a specific job."""
+    state_file = get_job_state_file(local_job_id)
+    if not os.path.exists(state_file):
+        return None
+    try:
+        with open(state_file, "r") as f:
+            return json.load(f)
+    except:
+        return None
+
 def get_ledger() -> Dict[str, Any]:
     with _ledger_lock:
         return _load_ledger()

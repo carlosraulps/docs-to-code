@@ -2,12 +2,15 @@ import os
 import json
 import uuid
 import threading
+import asyncio
 from pydantic import BaseModel, Field
 from typing import Literal, Optional
+from google import genai
 
 from src.services import vision
 from src.services.intelligence import CachedIntelligence
 from src.services.batch_processor import BatchProcessor
+from src.services.progressive_generator import ProgressiveGenerator
 from src.utils import job_manager
 
 class ProcessDocumentInput(BaseModel):
@@ -29,20 +32,33 @@ def log_progress(msg, verbose):
 def background_task(doc_path, work_dir, mode, is_pdf, local_job_id, start_page, end_page, verbose):
     job_manager.add_job(local_job_id, doc_path, mode)
     state_file = job_manager.get_job_state_file(local_job_id)
+    
+    # Load existing state if this is a resume attempt
+    existing_state = job_manager.get_job_state(local_job_id)
+    
     try:
         def update_state(state_data):
+            # Merge with existing state to preserve keys like 'uploaded_files_map'
+            current_state = job_manager.get_job_state(local_job_id) or {}
+            current_state.update(state_data or {})
+            
             with open(state_file, "w") as f:
-                json.dump(state_data, f)
-            status = state_data.get("status")
+                json.dump(current_state, f)
+            
+            status = current_state.get("status")
             if status:
                 job_manager.update_job(
                     local_job_id,
                     status=status,
-                    gemini_job_id=state_data.get("job_id"),
-                    state_data=state_data
+                    gemini_job_id=current_state.get("job_id"),
+                    state_data=current_state
                 )
-                
-        if is_pdf:
+        
+        # Check if images are already extracted (for resume)
+        import glob
+        existing_images = glob.glob(os.path.join(work_dir, "*XImage*.png"))
+        
+        if is_pdf and not existing_images:
             def extraction_callback(current, total):
                 percent = int((current / total) * 100)
                 update_state({
@@ -59,6 +75,15 @@ def background_task(doc_path, work_dir, mode, is_pdf, local_job_id, start_page, 
             )
             if not image_paths:
                 raise Exception("vision.process_pdf returned empty list. PDF extraction failed or found no pages.")
+        elif is_pdf and existing_images:
+            # Re-discover extracted images and sort by index
+            import re
+            def get_page_idx(path):
+                match = re.search(r"XImage(\d+)\.png", os.path.basename(path))
+                return int(match.group(1)) if match else 0
+                
+            image_paths = sorted(existing_images, key=get_page_idx)
+            log_progress(f"Job {local_job_id}: Found {len(image_paths)} existing images, skipping extraction.", verbose)
         else:
             image_paths = [os.path.join(doc_path, f) for f in os.listdir(doc_path) if f.lower().endswith((".png", ".jpg", ".jpeg"))]
             image_paths.sort()
@@ -67,14 +92,17 @@ def background_task(doc_path, work_dir, mode, is_pdf, local_job_id, start_page, 
         log_progress(f"Job {local_job_id}: uploading images to Gemini API...", verbose)
             
         processor = BatchProcessor()
-        log_progress(f"Job {local_job_id}: submitting batch job...", verbose)
+        log_progress(f"Job {local_job_id}: submitting batch job (resumable)...", verbose)
         
-        result = processor.process_directory_batch(image_paths, mode, update_state_cb=update_state)
+        # Pass existing state containing 'uploaded_files_map' to resume uploads
+        result = processor.process_directory_batch(
+            image_paths, 
+            mode, 
+            update_state_cb=update_state,
+            existing_state=existing_state
+        )
         
         log_progress(f"Job {local_job_id}: batch job submitted. Results: {result}", verbose)
-        
-        # result was already written by update_state inside process_directory_batch if it succeeded
-        # but just to be sure:
         update_state(result)
             
     except Exception as e:
@@ -83,6 +111,121 @@ def background_task(doc_path, work_dir, mode, is_pdf, local_job_id, start_page, 
             json.dump(error_state, f)
         job_manager.update_job(local_job_id, status="failed", error_msg=str(e), state_data=error_state)
         log_progress(f"Job {local_job_id} failed: {e}", verbose)
+
+def retry_job(local_job_id: str) -> str:
+    """Restarts a failed or stalled background job from its last checkpoint."""
+    ledger = job_manager.get_ledger()
+    if local_job_id not in ledger:
+        return json.dumps({"error": "JobNotFound", "details": f"No job found with ID {local_job_id}"})
+    
+    job_info = ledger[local_job_id]
+    doc_path = job_info["doc_path"]
+    mode = job_info["mode"]
+    
+    # Re-calculate necessary context for background_task
+    is_pdf = doc_path.lower().endswith(".pdf")
+    if is_pdf:
+        output_dir = os.path.dirname(doc_path)
+        base_name = os.path.splitext(os.path.basename(doc_path))[0]
+        work_dir = os.path.join(output_dir, base_name, "figures")
+    else:
+        work_dir = doc_path
+        
+    # Fixed parameters as per original requirement (can be expanded later)
+    start_page = None
+    end_page = None
+    verbose = True 
+    
+    t = threading.Thread(target=background_task, args=(doc_path, work_dir, mode, is_pdf, local_job_id, start_page, end_page, verbose))
+    t.daemon = True
+    t.start()
+    
+    return json.dumps({
+        "status": "resumed",
+        "job_id": local_job_id,
+        "message": f"Job {local_job_id} has been resumed. Check status later."
+    }, indent=2)
+
+def resume_and_generate_task(local_job_id: str) -> str:
+    """Uses client-side progressive generation for already uploaded batches."""
+    ledger = job_manager.get_ledger()
+    if local_job_id not in ledger:
+        return json.dumps({"error": "JobNotFound", "details": f"No job found with ID {local_job_id}"})
+    
+    job_info = ledger[local_job_id]
+    doc_path = job_info.get("doc_path")
+    mode = job_info.get("mode", "latex")
+
+    existing_state = job_manager.get_job_state(local_job_id)
+    if not existing_state or "uploaded_files_map" not in existing_state:
+        return json.dumps({"error": "NoUploadsFound", "details": "The job state does not contain an uploaded_files_map."})
+    
+    uploaded_files_map = existing_state["uploaded_files_map"]
+    generated_pages = existing_state.get("generated_pages", [])
+    
+    def internal_sync_task():
+        try:
+            client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+            
+            def update_cb(local_path: str, stat: str, page_num: int):
+                st = job_manager.get_job_state(local_job_id) or {}
+                pgs = st.get("generated_pages", [])
+                if stat == "generated" and page_num not in pgs:
+                    pgs.append(page_num)
+                
+                st["generated_pages"] = pgs
+                st["status"] = "generating_progressively"
+                st["message"] = f"Generated {len(pgs)}/{len(uploaded_files_map)} pages."
+                
+                state_file = job_manager.get_job_state_file(local_job_id)
+                with open(state_file, "w") as f:
+                    json.dump(st, f)
+                    
+                job_manager.update_job(
+                    local_job_id,
+                    status="generating_progressively",
+                    state_data=st
+                )
+
+            # Get Prompt
+            from src.services.intelligence import ContextMerger
+            master_prompt = ContextMerger.get_master_prompt(mode)
+            
+            generator = ProgressiveGenerator(client, local_job_id, doc_path, mode, update_cb, generated_pages)
+            
+            # Need an explicit event loop for the background thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(generator.run(uploaded_files_map, master_prompt, generated_pages))
+            loop.close()
+            
+            # Mark Finished
+            st = job_manager.get_job_state(local_job_id) or {}
+            st["status"] = "completed"
+            st["message"] = f"Job fully completed locally. Saved to: {generator.output_file}"
+            state_file = job_manager.get_job_state_file(local_job_id)
+            with open(state_file, "w") as f:
+                json.dump(st, f)
+            job_manager.update_job(local_job_id, status="completed", state_data=st)
+            
+        except Exception as e:
+            err_state = job_manager.get_job_state(local_job_id) or {}
+            err_state["status"] = "failed"
+            err_state["error"] = str(e)
+            with open(job_manager.get_job_state_file(local_job_id), "w") as f:
+                json.dump(err_state, f)
+            job_manager.update_job(local_job_id, status="failed", error_msg=str(e), state_data=err_state)
+
+    t = threading.Thread(target=internal_sync_task)
+    t.daemon = True
+    t.start()
+    
+    return json.dumps({
+        "status": "processing_background",
+        "job_id": local_job_id,
+        "mode": "progressive",
+        "message": f"Job {local_job_id} is generating natively inside MCP via asyncio."
+    }, indent=2)
 
 def smart_process_document(input_data: ProcessDocumentInput) -> str:
     doc_path = input_data.document_path
