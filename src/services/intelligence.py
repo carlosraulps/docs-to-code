@@ -116,7 +116,7 @@ class Intelligence:
             raise ValueError("GOOGLE_API_KEY not found. Please set it in environment variables or .env file.")
         
         self.client = genai.Client(api_key=self.api_key)
-        self.model_name = 'gemini-3.1-pro-preview'
+        self.model_name = 'gemini-3-pro-preview'
 
     def transcribe_image(self, image_path: str, mode: str = "both") -> dict:
         """

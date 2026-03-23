@@ -1,8 +1,11 @@
 import os
 import json
 import time
+import logging
+import concurrent.futures
 from pathlib import Path
-from typing import List, Dict, Any, Callable
+from tenacity import retry, wait_exponential, stop_after_attempt
+from typing import List, Dict, Any, Callable, Optional, Union
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
@@ -11,6 +14,49 @@ from src.models.data_models import DocumentPayload
 from src.services.intelligence import ContextMerger
 
 load_dotenv()
+
+# Setup robust logging
+log_dir = os.path.expanduser("~/.cache/docs-to-code")
+os.makedirs(log_dir, exist_ok=True)
+logger = logging.getLogger("batch_processor")
+logger.setLevel(logging.INFO)
+file_handler = logging.FileHandler(os.path.join(log_dir, "gemini_api.log"))
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+file_handler.setFormatter(formatter)
+if not logger.handlers:
+    logger.addHandler(file_handler)
+
+class BatchUploadWorker:
+    """Decoupled worker responsible purely for resilient HTTP interactions with Gemini API."""
+    def __init__(self, client):
+        self.client = client
+
+    @retry(
+        wait=wait_exponential(multiplier=2, min=4, max=60), 
+        stop=stop_after_attempt(5),
+        reraise=True
+    )
+    def upload_with_retry(self, path: str) -> Any:
+        """Uploads a file with resilient retry logic."""
+        logger.info(f"Attempting API upload for: {os.path.basename(path)}")
+        try:
+            f_ref = self.client.files.upload(file=path)
+            return f_ref
+        except Exception as e:
+            logger.warning(f"Upload attempt failed for {os.path.basename(path)}: {e}")
+            raise e
+
+    def upload_with_timeout(self, path: str, timeout_sec: int = 120) -> Any:
+        """Wraps the retry worker with a hard thread-enforced timeout."""
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(self.upload_with_retry, path)
+            try:
+                return future.result(timeout=timeout_sec)
+            except concurrent.futures.TimeoutError:
+                logger.error(f"Upload stalled indefinitely for {path}. Execution timed out after {timeout_sec}s.")
+                # We raise a custom exception that tenacity can potentially catch if desired, 
+                # but here it's caught at the orchestrator level.
+                raise TimeoutError(f"Upload timed out for {path}")
 
 class BatchProcessor:
     """
@@ -21,63 +67,77 @@ class BatchProcessor:
         if not self.api_key:
             raise ValueError("GOOGLE_API_KEY not found.")
         self.client = genai.Client(api_key=self.api_key)
-        self.model_name = 'gemini-3.1-pro-preview'
+        self.model_name = 'gemini-3-flash-preview'
 
-    def process_directory_batch(self, image_paths: List[str], mode: str, update_state_cb: Callable = None) -> Dict[str, Any]:
+    def process_directory_batch(self, image_paths: List[str], mode: str, update_state_cb: Callable = None, existing_state: Dict = None) -> Dict[str, Any]:
         """
-        Takes a list of images, uploads them to Gemini Files, creates a JSONL buffer,
-        and submits the batch job. Returns the Batch Job Metadata.
+        Takes a list of images, uploads them to Gemini Files with resumability and concurrency,
+        creates a JSONL buffer, and submits the batch job.
         """
         if not image_paths:
             return {"status": "error", "message": "No images provided for batching."}
 
+        # 1. Initialize resumable checkpoint mapping: local path -> Remote File URI
+        uploaded_files_map: Dict[str, str] = {}
+        if existing_state and "uploaded_files_map" in existing_state:
+            uploaded_files_map = existing_state["uploaded_files_map"]
+            logger.info(f"Found existing state checkpoint. Resuming from {len(uploaded_files_map)} uploaded files.")
+
         master_prompt = ContextMerger.get_master_prompt(mode)
-        jsonl_lines = []
-        
-        print(f"Preparing batch job for {len(image_paths)} files...")
-        
-        # 1. Upload files securely for the batch
-        uploaded_files = []
         total_files = len(image_paths)
-        import threading
-        # Ensure we only have 3 concurrent staging uploads globally at any given time
-        _upload_semaphore = getattr(BatchProcessor, '_upload_sem', threading.Semaphore(3))
-        BatchProcessor._upload_sem = _upload_semaphore
         
-        for i, path in enumerate(image_paths):
-            try:
-                if update_state_cb:
-                    update_state_cb({
-                        "status": "uploading_images",
-                        "uploaded": i,
-                        "total": total_files,
-                        "current_file": os.path.basename(path)
-                    })
-                # In production, check if file exists on Gemini first, but for now upload
-                with _upload_semaphore:
-                    f_ref = self.client.files.upload(file=path)
-                    uploaded_files.append((path, f_ref))
-                print(f"Uploaded {os.path.basename(path)} to staging. ({i+1}/{total_files})")
-                time.sleep(1) # Be nice to the API rate limits during staging
-            except Exception as e:
-                print(f"Failed to stage {path}: {e}")
-
-        if not uploaded_files:
-            return {"status": "error", "message": "Failed to upload any files to staging."}
-
-        if update_state_cb:
-            update_state_cb({
-                "status": "submitting_batch_job",
-                "uploaded": len(uploaded_files),
-                "total": total_files
-            })
-
-        # 2. Construct JSONL payload
-        for local_path, file_ref in uploaded_files:
-            # The custom ID allows us to map the async result back to the specific image
-            request_id = os.path.basename(local_path)
+        # 2. Filter out already processed artifacts
+        pending_paths = [p for p in image_paths if p not in uploaded_files_map]
+        
+        if pending_paths:
+            print(f"Preparing batch job: {len(uploaded_files_map)} already uploaded, uploading {len(pending_paths)} pending files...")
+            worker = BatchUploadWorker(self.client)
             
-            # The structure dictated by the Gemini Batch API
+            # 3. Controlled Async Concurrency (Pool of 5)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                # Submit mapping: { Future: path }
+                future_to_path = {
+                    executor.submit(worker.upload_with_timeout, path, 120): path 
+                    for path in pending_paths
+                }
+                
+                for future in concurrent.futures.as_completed(future_to_path):
+                    path = future_to_path[future]
+                    try:
+                        f_ref = future.result()
+                        # Store the URI or identifier returned by the API
+                        uploaded_files_map[path] = getattr(f_ref, 'uri', str(f_ref))
+                        
+                        # Dynamic Checkpoint save
+                        if update_state_cb:
+                            update_state_cb({
+                                "status": "uploading_images",
+                                "uploaded": len(uploaded_files_map),
+                                "total": total_files,
+                                "uploaded_files_map": uploaded_files_map,
+                                "current_file": os.path.basename(path)
+                            })
+                        print(f"Uploaded {os.path.basename(path)} ({len(uploaded_files_map)}/{total_files})")
+                            
+                    except Exception as exc:
+                        logger.error(f"Critical failure uploading {path}: {exc}", exc_info=True)
+                        return {
+                            "status": "error", 
+                            "message": f"Pipeline failed on {os.path.basename(path)}: {str(exc)}",
+                            "uploaded_files_map": uploaded_files_map # Return current progress for future retry
+                        }
+        else:
+            print("All files already uploaded. Proceeding to batch submission.")
+
+        # 4. Construct JSONL payload via the checkpoint map
+        jsonl_lines = []
+        for local_path in image_paths:
+            file_uri = uploaded_files_map.get(local_path)
+            if not file_uri:
+                logger.error(f"Missing file URI for {local_path} despite successful upload loop.")
+                continue
+
+            request_id = os.path.basename(local_path)
             request = {
                 "custom_id": request_id,
                 "method": "POST",
@@ -91,7 +151,7 @@ class BatchProcessor:
                                 {"type": "text", "text": master_prompt},
                                 {
                                     "type": "image_url", 
-                                    "image_url": {"url": file_ref.uri} 
+                                    "image_url": {"url": file_uri} 
                                 }
                             ]
                         }
@@ -129,9 +189,10 @@ class BatchProcessor:
                 "status": "processing_background",
                 "job_id": batch_job.name,
                 "job_state": batch_job.state,
-                "uploaded": len(uploaded_files),
+                "uploaded": len(uploaded_files_map),
                 "total": total_files,
-                "message": f"Successfully queued {len(uploaded_files)} pages. Job ID: {batch_job.name}. Please inform user and check status later."
+                "uploaded_files_map": uploaded_files_map,
+                "message": f"Successfully queued {len(uploaded_files_map)} pages. Job ID: {batch_job.name}. Please inform user and check status later."
             }
             if update_state_cb:
                 update_state_cb(result)
