@@ -1,9 +1,9 @@
 {
-  "name": "docs-to-code",
+  "name": "pdftex-mcp",
   "version": "2.0.0",
   "description": "An Agent Skill providing tools to convert pdf's or images of textbooks, handwritten notes, and handwritten equations into LaTeX or Markdown.",
   "mcpServers": {
-    "docs-to-code": {
+    "pdftex-mcp": {
       "command": "/Users/apple/venvs/research/bin/python3",
       "args": [
         "/Users/apple/Research/docs-to-code/src/interfaces/mcp_server.py"

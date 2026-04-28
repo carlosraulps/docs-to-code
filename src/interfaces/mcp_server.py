@@ -46,7 +46,7 @@ from src.tools.check_batch_status import check_batch_job
 from src.tools.process_document import ProcessDocumentInput
 from src.tools.check_batch_status import CheckBatchStatusInput
 
-mcp = FastMCP("docs-to-code")
+mcp = FastMCP("pdftex-mcp")
 
 @mcp.tool()
 def process_document(document_path: str, mode: str = "latex", threshold_pages: int = 50, start_page: Optional[int] = None, end_page: Optional[int] = None, verbose: bool = False) -> str:

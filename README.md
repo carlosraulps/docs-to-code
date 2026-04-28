@@ -96,7 +96,7 @@ This application is built as an MCP server. Add the following to your agent's co
 ```json
 {
   "mcpServers": {
-    "images-to-tex": {
+    "pdftex-mcp": {
       "command": "python3",
       "args": ["-m", "src.interfaces.mcp_server"],
       "cwd": "/absolute/path/to/docs-to-code",
