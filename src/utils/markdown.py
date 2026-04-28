@@ -1,4 +1,5 @@
 import os
+import sys
 import re
 from typing import List
 
@@ -51,5 +52,5 @@ def generate_md_file(title: str, content_list: List[str], output_dir: str | Path
         
         return str(output_path)
     except Exception as e:
-        print(f"Error writing Markdown file {output_path}: {e}")
+        print(f"Error writing Markdown file {output_path}: {e}", file=sys.stderr)
         return ""

@@ -1,6 +1,7 @@
 import json
 import re
 import time
+import sys
 from google.genai import types
 from pydantic import BaseModel
 from typing import Optional, Type, Dict, Any
@@ -44,6 +45,7 @@ def generate_pydantic_with_retry(
     
     current_contents = contents.copy()
     
+    raw_text = "No output generated"
     for attempt in range(max_retries):
         try:
             response = client.models.generate_content(
@@ -51,8 +53,10 @@ def generate_pydantic_with_retry(
                 contents=current_contents,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
-                    response_schema=response_schema
+                    response_schema=response_schema,
+                    max_output_tokens=8192
                 )
+
             )
             
             raw_text = response.text
@@ -74,12 +78,12 @@ def generate_pydantic_with_retry(
             
         except Exception as e:
             error_str = str(e)
-            print(f"[Warning] Parsing/Validation Error on attempt {attempt + 1}/{max_retries}: {error_str}")
+            print(f"[Warning] Parsing/Validation Error on attempt {attempt + 1}/{max_retries}: {error_str}", file=sys.stderr)
             
             # Simple exponential backoff to handle 429 Too Many Requests
             if "429" in error_str or "quota" in error_str.lower() or "exhausted" in error_str.lower():
                 sleep_time = 2 ** attempt
-                print(f"[Info] Rate limit detected. Sleeping for {sleep_time} seconds before retry.")
+                print(f"[Info] Rate limit detected. Sleeping for {sleep_time} seconds before retry.", file=sys.stderr)
                 time.sleep(sleep_time)
                 
             if attempt < max_retries - 1:
@@ -90,7 +94,7 @@ Context: You are tasked with converting the provided image into strict JSON acco
 Historical Error Report:
 
 Previous Failed Output:
-{locals().get('raw_text', 'No output generated')}
+{raw_text}
 
 System Error Caused:
 Error: {str(e)}
@@ -105,8 +109,9 @@ Strict Constraints: You must output ONLY valid, raw JSON. Do not include apologi
                 current_contents = [c for c in contents if not isinstance(c, str)]
                 current_contents.append(base_prompt + "\n\n" + error_feedback)
             else:
-                print(f"[Error] Max retries ({max_retries}) reached. Returning error payload.")
-                # Fallback to a synthetic empty dict structure if nothing works
-                return {}
+                print(f"[Error] Max retries ({max_retries}) reached. Returning error payload.", file=sys.stderr)
+                # Fallback to a dictionary indicating the error if nothing works
+                return {"_error": f"Failed after {max_retries} attempts. Last error: {str(raw_text if 'raw_text' in locals() else 'None')[:200]}... Errmsg: {str(e)}"}
             
-    return {}
+    return {"_error": "Unknown failure in generate_pydantic_with_retry"}
+

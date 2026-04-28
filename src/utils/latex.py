@@ -1,4 +1,5 @@
 import os
+import sys
 from typing import List
 
 from pathlib import Path
@@ -25,7 +26,7 @@ def generate_tex_file(title: str, content_list: List[str], output_dir: str | Pat
         
         return output_path
     except Exception as e:
-        print(f"Error writing LaTeX file {output_path}: {e}")
+        print(f"Error writing LaTeX file {output_path}: {e}", file=sys.stderr)
         return ""
 
 def get_packages_block() -> str:

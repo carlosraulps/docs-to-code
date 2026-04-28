@@ -1,6 +1,7 @@
 import os
 import re
 import cv2
+import sys
 import numpy as np
 from pathlib import Path
 from pdf2image import convert_from_path
@@ -31,7 +32,7 @@ def process_pdf(pdf_path: Union[str, Path], output_dir: Union[str, Path], start_
         chunk_size = 10
         saved_paths = []
         
-        print(f"Starting chunked extraction for {base_name} ({total_to_extract} pages)...")
+        print(f"Starting chunked extraction for {base_name} ({total_to_extract} pages)...", file=sys.stderr)
         
         for current_start in range(actual_start, actual_end + 1, chunk_size):
             current_end = min(current_start + chunk_size - 1, actual_end)
@@ -71,7 +72,7 @@ def process_pdf(pdf_path: Union[str, Path], output_dir: Union[str, Path], start_
                             os.rename(filepath, new_path)
                             saved_paths.append(str(new_path))
                     except Exception as e:
-                        print(f"Rename error for {filename}: {e}")
+                        print(f"Rename error for {filename}: {e}", file=sys.stderr)
                 elif filename not in [os.path.basename(p) for p in saved_paths]:
                      # Fallback if it didn't have a dash but is new
                      saved_paths.append(filepath)
@@ -82,11 +83,11 @@ def process_pdf(pdf_path: Union[str, Path], output_dir: Union[str, Path], start_
         # Final sort to ensure page order
         saved_paths = sorted(list(set(saved_paths)), key=lambda x: int(re.search(r"XImage(\d+)\.png$", x).group(1)) if re.search(r"XImage(\d+)\.png$", x) else 0)
         
-        print(f"Successfully chunked {len(saved_paths)} pages to {output_dir}")
+        print(f"Successfully chunked {len(saved_paths)} pages to {output_dir}", file=sys.stderr)
         return saved_paths
         
     except Exception as e:
-        print(f"Error processing PDF {pdf_path}: {e}")
+        print(f"Error processing PDF {pdf_path}: {e}", file=sys.stderr)
         return []
 
 def enhance_image(image_path: Union[str, Path]) -> str:
@@ -100,7 +101,7 @@ def enhance_image(image_path: Union[str, Path]) -> str:
     try:
         img = cv2.imread(image_path_str)
         if img is None:
-            print(f"Failed to load image: {image_path_str}")
+            print(f"Failed to load image: {image_path_str}", file=sys.stderr)
             return image_path_str
 
         # 1. Grayscale
@@ -141,7 +142,7 @@ def enhance_image(image_path: Union[str, Path]) -> str:
         return enhanced_path
 
     except Exception as e:
-        print(f"Error enhancing image {image_path_str}: {e}")
+        print(f"Error enhancing image {image_path_str}: {e}", file=sys.stderr)
         return image_path_str
 
 def get_image_grouping(folder_path: Union[str, Path]) -> Dict[str, List[str]]:

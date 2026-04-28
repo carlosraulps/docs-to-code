@@ -1,6 +1,7 @@
 import json
 import os
 import hashlib
+import sys
 from typing import Dict, Any, Optional
 
 class Memory:
@@ -20,7 +21,7 @@ class Memory:
                 with open(self.log_path, 'r') as f:
                     return json.load(f)
             except json.JSONDecodeError:
-                print("Warning: corrupted log file. Starting fresh.")
+                print("Warning: corrupted log file. Starting fresh.", file=sys.stderr)
                 return {}
         return {}
 
@@ -52,7 +53,7 @@ class Memory:
                     error_found = True
                     
             if error_found:
-                print(f"Retrying failed image: {os.path.basename(image_path)}")
+                print(f"Retrying failed image: {os.path.basename(image_path)}", file=sys.stderr)
                 return False
 
             # Check if file has been modified since last process

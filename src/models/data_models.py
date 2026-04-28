@@ -13,4 +13,5 @@ class BaseLatexMd(BaseModel):
 class DocumentPayload(BaseModel):
     base_latex_md: BaseLatexMd
     annotations_metadata: List[AnnotationMetadata]
-    api_usage: Optional[Dict[str, Any]] = Field(default=None, description="API Token usage and source information.")
+    api_usage: Optional[Any] = Field(default=None, description="API Token usage and source information.")
+
