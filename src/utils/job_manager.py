@@ -4,7 +4,7 @@ import datetime
 import threading
 from typing import Dict, Any, Optional
 
-JOBS_DIR = os.path.join(os.getcwd(), ".jobs")
+JOBS_DIR = os.path.expanduser("~/.cache/docs-to-code/jobs")
 LEDGER_FILE = os.path.join(JOBS_DIR, "jobs_ledger.json")
 _ledger_lock = threading.Lock()
 

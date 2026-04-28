@@ -241,15 +241,20 @@ def smart_process_document(input_data: ProcessDocumentInput) -> str:
     try:
         is_pdf = doc_path.lower().endswith(".pdf")
         
-        # If it's a folder, output_dir should be parallel or inside it, etc.
+        # If it's a folder, output_dir should be in the global cache
+        cache_base = os.path.expanduser("~/.cache/docs-to-code/extracted")
         if is_pdf:
-            output_dir = os.path.dirname(doc_path)
             base_name = os.path.splitext(os.path.basename(doc_path))[0]
-            work_dir = os.path.join(output_dir, base_name, "figures")
+            work_dir = os.path.join(cache_base, base_name, "figures")
         else:
-            work_dir = doc_path # For directory, work_dir is the dir itself
+            if os.path.isdir(doc_path):
+                work_dir = doc_path # For directory, we still use the source for now
+            else:
+                base_name = os.path.splitext(os.path.basename(doc_path))[0]
+                work_dir = os.path.join(cache_base, base_name)
             
-        os.makedirs(work_dir, exist_ok=True)
+        if work_dir:
+            os.makedirs(work_dir, exist_ok=True)
         
         num_images = 0
         if is_pdf:

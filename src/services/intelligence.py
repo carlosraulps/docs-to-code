@@ -1,3 +1,7 @@
+import threading
+import sys
+_GLOBAL_CACHES_LOCK = threading.Lock()
+_GLOBAL_CACHES = {}
 import os
 from google import genai
 from dotenv import load_dotenv
@@ -5,8 +9,9 @@ from dotenv import load_dotenv
 from src.models.data_models import DocumentPayload
 from src.utils import llm_utils
 
-# Load environment variables
-load_dotenv()
+# Load environment variables from extension root
+EXT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+load_dotenv(os.path.join(EXT_ROOT, ".env"))
 
 class BaseContentExtractor:
     """Extracts only the printed/base content from the image, ignoring human annotations."""
@@ -116,7 +121,7 @@ class Intelligence:
             raise ValueError("GOOGLE_API_KEY not found. Please set it in environment variables or .env file.")
         
         self.client = genai.Client(api_key=self.api_key)
-        self.model_name = 'gemini-3-pro-preview'
+        self.model_name = 'gemini-3-flash-preview'
 
     def transcribe_image(self, image_path: str, mode: str = "both") -> dict:
         """
@@ -140,17 +145,19 @@ class Intelligence:
             )
             
             # Fallback handling if parsing completely failed
-            if not result_dict:
-                error_msg = f"% Error processing image: {os.path.basename(image_path)}\n% Error details: Failed to parse valid DocumentPayload JSON."
+            if not result_dict or "_error" in result_dict:
+                error_details = result_dict.get("_error", "Failed to parse valid DocumentPayload JSON.")
+                error_msg = f"% Error processing image: {os.path.basename(image_path)}\n% Error details: {error_details}"
                 return {
                     "base_latex_md": {"latex": error_msg, "markdown": error_msg},
                     "annotations_metadata": []
                 }
+
                 
             return result_dict
 
         except Exception as e:
-            print(f"API Error processing {image_path}: {e}")
+            print(f"API Error processing {image_path}: {e}", file=sys.stderr)
             error_msg = f"% Error processing image: {os.path.basename(image_path)}\n% Error details: {str(e)}"
             return {
                 "base_latex_md": {"latex": error_msg, "markdown": error_msg},
@@ -170,12 +177,13 @@ class CachedIntelligence(Intelligence):
         
     def initialize_cache(self, mode: str):
         """Creates or reuses a cached content object for the System/Master Prompt."""
+        global _GLOBAL_CACHES_LOCK, _GLOBAL_CACHES
         with _GLOBAL_CACHES_LOCK:
             if mode in _GLOBAL_CACHES:
                 try:
                     # Check if the existing cache is still valid (hasn't expired/been deleted remotely)
                     self.cached_content = self.client.caches.get(name=_GLOBAL_CACHES[mode].name)
-                    print(f"Reusing existing context cache for mode '{mode}': {self.cached_content.name}")
+                    print(f"Reusing existing context cache for mode '{mode}': {self.cached_content.name}", file=sys.stderr)
                     return
                 except Exception:
                     pass # Expired/invalid, recreate it below
@@ -194,9 +202,9 @@ class CachedIntelligence(Intelligence):
                     )
                 )
                 _GLOBAL_CACHES[mode] = self.cached_content
-                print(f"Context Cache created successfully: {self.cached_content.name}")
+                print(f"Context Cache created successfully: {self.cached_content.name}", file=sys.stderr)
             except Exception as e:
-                print(f"Context Cache creation failed, falling back to non-cached. Details: {e}")
+                print(f"Context Cache creation failed, falling back to non-cached. Details: {e}", file=sys.stderr)
                 self.cached_content = None
 
     def transcribe_image(self, image_path: str, mode: str = "both") -> dict:
@@ -221,15 +229,17 @@ class CachedIntelligence(Intelligence):
                         config=types.GenerateContentConfig(
                             cached_content=self.cached_content.name,
                             response_mime_type="application/json",
-                            response_schema=DocumentPayload
+                            response_schema=DocumentPayload,
+                            max_output_tokens=8192
                         )
+
                     )
                     sanitized_text = llm_utils.sanitize_json_string(response.text)
                     parsed_data = DocumentPayload.model_validate_json(sanitized_text)
                     result_dict = parsed_data.model_dump()
                     break
                 except Exception as e:
-                    print(f"[Warning] Cached parsing try {attempt+1}/3 failed: {e}")
+                    print(f"[Warning] Cached parsing try {attempt+1}/3 failed: {e}", file=sys.stderr)
                     contents.append(f"Previous attempt error: {str(e)}. Strictly output JSON schema.")
             
             if not result_dict:
@@ -238,7 +248,7 @@ class CachedIntelligence(Intelligence):
             return result_dict
 
         except Exception as e:
-            print(f"API Error processing {image_path}: {e}")
+            print(f"API Error processing {image_path}: {e}", file=sys.stderr)
             error_msg = f"% Error processing image: {os.path.basename(image_path)}\n% Error details: {str(e)}"
             return {
                 "base_latex_md": {"latex": error_msg, "markdown": error_msg},
@@ -250,6 +260,6 @@ class CachedIntelligence(Intelligence):
         if self.cached_content:
             try:
                 self.client.caches.delete(name=self.cached_content.name)
-                print(f"Cleaned up Context Cache: {self.cached_content.name}")
+                print(f"Cleaned up Context Cache: {self.cached_content.name}", file=sys.stderr)
             except Exception as e:
-                print(f"Failed to cleanup cache: {e}")
+                print(f"Failed to cleanup cache: {e}", file=sys.stderr)

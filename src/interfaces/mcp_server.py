@@ -1,5 +1,43 @@
+import dotenv; dotenv.load_dotenv(override=True, dotenv_path="/Users/apple/Research/docs-to-code/.env")
 import os
+import sys
 import json
+import asyncio
+from dotenv import load_dotenv
+
+# Get the absolute path to the extension's root directory
+EXT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Load the .env file from the extension root
+load_dotenv(os.path.join(EXT_ROOT, ".env"))
+
+# Ensure GEMINI_API_KEY is not set if GOOGLE_API_KEY is set to suppress SDK warning
+if os.environ.get("GOOGLE_API_KEY") and os.environ.get("GEMINI_API_KEY"):
+    del os.environ["GEMINI_API_KEY"]
+
+# Store the original stdout buffer for MCP communication before redirecting sys.stdout
+_REAL_STDOUT_BUFFER = sys.stdout.buffer
+
+class StdioRedirector:
+    def __init__(self, buffer, stderr):
+        self.stderr = stderr
+        self.buffer = buffer
+        self.encoding = getattr(stderr, "encoding", "utf-8")
+        
+    def write(self, data):
+        self.stderr.write(data)
+        
+    def writelines(self, lines):
+        self.stderr.writelines(lines)
+        
+    def flush(self):
+        self.stderr.flush()
+
+    def isatty(self):
+        return getattr(self.stderr, "isatty", lambda: False)()
+
+# REDIRECT NOW before any other imports
+sys.stdout = StdioRedirector(_REAL_STDOUT_BUFFER, sys.stderr)
+
 from typing import Optional
 from mcp.server.fastmcp import FastMCP
 

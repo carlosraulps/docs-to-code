@@ -2,6 +2,7 @@ import os
 import json
 import time
 import logging
+import sys
 import concurrent.futures
 from pathlib import Path
 from tenacity import retry, wait_exponential, stop_after_attempt
@@ -13,7 +14,9 @@ from dotenv import load_dotenv
 from src.models.data_models import DocumentPayload
 from src.services.intelligence import ContextMerger
 
-load_dotenv()
+# Load environment variables from extension root
+EXT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+load_dotenv(os.path.join(EXT_ROOT, ".env"))
 
 # Setup robust logging
 log_dir = os.path.expanduser("~/.cache/docs-to-code")
@@ -90,7 +93,7 @@ class BatchProcessor:
         pending_paths = [p for p in image_paths if p not in uploaded_files_map]
         
         if pending_paths:
-            print(f"Preparing batch job: {len(uploaded_files_map)} already uploaded, uploading {len(pending_paths)} pending files...")
+            print(f"Preparing batch job: {len(uploaded_files_map)} already uploaded, uploading {len(pending_paths)} pending files...", file=sys.stderr)
             worker = BatchUploadWorker(self.client)
             
             # 3. Controlled Async Concurrency (Pool of 5)
@@ -117,7 +120,7 @@ class BatchProcessor:
                                 "uploaded_files_map": uploaded_files_map,
                                 "current_file": os.path.basename(path)
                             })
-                        print(f"Uploaded {os.path.basename(path)} ({len(uploaded_files_map)}/{total_files})")
+                        print(f"Uploaded {os.path.basename(path)} ({len(uploaded_files_map)}/{total_files})", file=sys.stderr)
                             
                     except Exception as exc:
                         logger.error(f"Critical failure uploading {path}: {exc}", exc_info=True)
@@ -127,7 +130,7 @@ class BatchProcessor:
                             "uploaded_files_map": uploaded_files_map # Return current progress for future retry
                         }
         else:
-            print("All files already uploaded. Proceeding to batch submission.")
+            print("All files already uploaded. Proceeding to batch submission.", file=sys.stderr)
 
         # 4. Construct JSONL payload via the checkpoint map
         jsonl_lines = []
@@ -173,7 +176,7 @@ class BatchProcessor:
                 file=batch_input_path,
                 config={"mime_type": "application/jsonl"}
             )
-            print(f"Uploaded JSONL definition. Triggering Job...")
+            print(f"Uploaded JSONL definition. Triggering Job...", file=sys.stderr)
             
             # 5. Execute Job
             batch_job = self.client.batches.create(
@@ -240,7 +243,7 @@ class BatchProcessor:
                 return f"Job is not completed yet. Current state: {state_str}"
             
             file_name = job.dest.file_name
-            print(f"Downloading {file_name}...")
+            print(f"Downloading {file_name}...", file=sys.stderr)
             content = self.client.files.download(file=file_name)
             
             raw_path = os.path.join(output_dir, "raw_batch_results.jsonl")
